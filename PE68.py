@@ -88,4 +88,4 @@ for a in nums:
                                                 l.append(mask(a,b,c,d,e,f,g,h,i,j))
 
 
-print(max(l) if len(max(l)) == 16 else '')
+print(max(l) if len(max(l)) == 16 else 0)
