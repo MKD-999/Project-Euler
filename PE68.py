@@ -89,3 +89,5 @@ for a in nums:
 
 
 print(max(l) if len(max(l)) == 16 else 0)
+end = t()
+print(end-strt)
