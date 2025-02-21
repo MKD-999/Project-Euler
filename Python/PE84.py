@@ -146,20 +146,34 @@ for i in range(40):
 transition_matrix = np.dot(dice_matrix, card_matrix)
 """
 
+# Trial 2
+# Using Markov Chains again, but this time defining the state differently
+# By defining it as (space, double_count) instead of (space) which includes (space, double_count) as data in it
+
+# Another change is in how we calculate the dice probabilities. We use both dice now
+
 from fractions import Fraction as F
 import numpy as np
 from time import time as t
 
 strt = t()
 
-# Build the Dice Transition Matrices
 dice_vals = []
-for die1 in range(1, 7):
-    for die2 in range(1, 7):
+
+# Rolling 2 dice
+for die1 in range(1, 5):
+    for die2 in range(1, 5):
         die_sum = die1 + die2
         is_double = (die1 == die2)
         dice_vals.append([die_sum, is_double])
 
+# We know it's going to be a 120 x 120 matrix, because there are 40 x 3 = 120 iterations
+
+# Ok, this part involves some " folding the probabilities " for doubles which went over my head
+# Have to look at this again later
+# Code courtesy (only this part) - ChatGPT
+
+# Create two matrices: N (ending outcomes) and D (double outcomes for extra roll)
 N = np.zeros((120, 120), dtype=object)
 D = np.zeros((120, 120), dtype=object)
 for i in range(120):
@@ -169,135 +183,207 @@ for i in range(120):
 
 for space in range(40):
     for double_count in range(3):
+
         current_state = (space * 3) + double_count
+
         for outcome in dice_vals:
-            dist, roll_is_double = outcome
-            new_doubles = double_count + 1 if roll_is_double else 0
+
+            dist = outcome[0]
+            roll_is_double = outcome[1]
+
+            # Use the current double_count from the outer loop
+            if roll_is_double:
+                new_doubles = double_count + 1
+            else:
+                new_doubles = 0
+
+            # If triple doubles, send to Jail
             if roll_is_double and new_doubles == 3:
-                new_space, new_doubles = 10, 0  # Go to Jail
+                new_space = 10
+                new_doubles = 0
+
             else:
+                # Update board position (use 'space', not the full state index)
                 new_space = (space + dist) % 40
-            new_state_index = (new_space * 3) + new_doubles
+
+            new_state = [new_space, new_doubles]
+            new_state_index = (new_state[0] * 3) + new_state[1]
+
+            # Each outcome has probability 1/36.
+
             if roll_is_double and new_doubles != 0:
+                # Roll is a double that doesn't trigger jail -> extra roll (contribute to D)
                 D[current_state, new_state_index] += F(1, 36)
+
             else:
+                # Either not a double or triple-double (sending to jail) -> turn ends (contribute to N)
                 N[current_state, new_state_index] += F(1, 36)
 
-# Debug: Check transition matrices for dice rolls
-print("Dice Transition Matrices (N and D):")
-print("N matrix: ", N[:5, :5])  # Show a small portion for inspection
-print("D matrix: ", D[:5, :5])  # Show a small portion for inspection
+# Now build the identity matrix I (as Fractions)
+I = np.empty((120, 120), dtype=object)
+for i in range(120):
+    for j in range(120):
+        I[i, j] = F(1) if i == j else F(0)
 
-I = np.array([[F(1) if i == j else F(0) for j in range(120)] for i in range(120)], dtype=object)
-I_f = np.array([[float(I[i, j]) for j in range(120)] for i in range(120)])
-D_f = np.array([[float(D[i, j]) for j in range(120)] for i in range(120)])
-N_f = np.array([[float(N[i, j]) for j in range(120)] for i in range(120)])
+# Convert I, D, and N to float for inversion.
+I_float = np.array([[float(I[i, j]) for j in range(120)] for i in range(120)])
+D_float = np.array([[float(D[i, j]) for j in range(120)] for i in range(120)])
+N_float = np.array([[float(N[i, j]) for j in range(120)] for i in range(120)])
 
-composite_dice = np.linalg.inv(I_f - D_f) @ N_f
+composite_dice = np.dot(np.linalg.inv(I_float - D_float), N_float)
 
-# Debug: Check composite dice matrix
-print("Composite Dice Transition Matrix:")
-print(composite_dice[:5, :5])  # Check a small portion of the composite dice matrix
 
-# Build the Card Transition Matrix
-card_matrix = np.array([[F(0) for _ in range(120)] for _ in range(120)], dtype=object)
+# Now for the card matrix
+card_matrix = np.zeros((120, 120), dtype=object)
+
+# Only Community cards (CC) and Chance cards (CH) affect movement
 
 CH_spaces = [7, 22, 36]
 CC_spaces = [2, 17, 33]
+
 RR = [5, 15, 25, 35]
 UT = [12, 28]
 
+
 def nearest_rail(state: int) -> int:
-    return min([r for r in RR if r > state], default=RR[0])
+    for rail in RR:
+        if rail > state:
+            return rail
+
+    return 5
+
 
 def nearest_ut(state: int) -> int:
-    return min([u for u in UT if u > state], default=UT[0])
 
-chance_moves = [
-    lambda space: 0,
-    lambda space: 10,
-    lambda space: 11,
-    lambda space: 24,
-    lambda space: 39,
-    lambda space: 5,
-    nearest_rail,
-    nearest_rail,
-    nearest_ut,
-    lambda space: (space - 3) % 40
-]
+    for utility in UT:
+        if utility > state:
+            return utility
 
-# Debug: Check Chance card transitions
+    return 12
+
+# A list of functions to which we are going to pass each CH space
+# Each function represents an instruction from the chance pile
+# Nearest Rail is included twice because there are 2 cards with the same instructions
+
+
+chance_moves = [lambda space: 0,
+                lambda space: 10,
+                lambda space: 11,
+                lambda space: 24,
+                lambda space: 39,
+                lambda space: 5,
+                nearest_rail,
+                nearest_rail,
+                nearest_ut,
+                lambda space: (space - 3) % 40
+                ]
+
+# Now we need to loop through all the chance spaces and pass each one to the functions in the list
 for space in CH_spaces:
+
+    # This loops through the moving cards
     for move in chance_moves:
+
+        # Our new space, i.e. new position
         land = move(space) % 40
+
         for double_count in range(3):
+
             current_state_index = (space * 3) + double_count
             new_state_index = (land * 3) + double_count
+
             card_matrix[current_state_index, new_state_index] += F(1, 16)
+
+    # The non - movement cards' probability being added
+    #  Probability of non - moving cards = 6/16
+
     for double_count in range(3):
-        card_matrix[(space * 3) + double_count, (space * 3) + double_count] += F(6, 16)
+        current_state_index = (space * 3) + double_count
 
-# Debug: Check card matrix after Chance spaces
-print("Card Matrix after Chance spaces:")
-print(card_matrix[:5, :5])  # Check a small portion
+        card_matrix[current_state_index, current_state_index] += F(6, 16)
 
-community_moves = [lambda space: 0, lambda space: 10]
+community_moves = [lambda space: 0,
+                   lambda space: 10]
+
 for space in CC_spaces:
+
+    # This is for looping through the moving cards
     for move in community_moves:
+
         land = move(space) % 40
+
         for double_count in range(3):
-            card_matrix[(space * 3) + double_count, (land * 3) + double_count] += F(1, 16)
+
+            current_state_index = (space * 3) + double_count
+            new_state_index = (land * 3) + double_count
+
+            card_matrix[current_state_index, new_state_index] += F(1, 16)
+
+    # The non - movement cards' probability being added
+    # Probability of non - moving cards = 14/16
+
     for double_count in range(3):
-        card_matrix[(space * 3) + double_count, (space * 3) + double_count] += F(14, 16)
+        current_state_index = (space * 3) + double_count
+
+        card_matrix[current_state_index, current_state_index] += F(14, 16)
+
 
 for space in range(40):
     if space not in (CC_spaces + CH_spaces):
+
         for double_count in range(3):
-            card_matrix[(space * 3) + double_count, (space * 3) + double_count] += F(1)
 
-card_matrix_f = np.array([[float(card_matrix[i, j]) for j in range(120)] for i in range(120)])
+            current_state_index = (space * 3) + double_count
 
-# Debug: Check card matrix after all updates
-print("Card Matrix after all updates:")
-print(card_matrix_f[:5, :5])  # Check a small portion
+            card_matrix[current_state_index, current_state_index] += F(1)
 
-final_transition_matrix = composite_dice @ card_matrix_f
+card_matrix_float = np.array([[float(card_matrix[i, j]) for j in range(120)] for i in range(120)])
 
-# Enforce "Go To Jail" rule
+transition_matrix = np.dot(composite_dice, card_matrix_float)
+
+
 for state_index in range(120):
     board_position = state_index // 3
-    if board_position == 30:  # Go to Jail (position 30)
-        final_transition_matrix[state_index, :] = 0
-        final_transition_matrix[state_index, 30] = 1.0  # Go directly to jail (space 30)
+    if board_position == 30:
+        # Set the entire row to 0.
+        transition_matrix[state_index, :] = 0
+        # Force the move to Jail: board position 10, double count 0 (state index 30).
+        transition_matrix[state_index, 30] = 1.0
 
-# Debug: Check final transition matrix
-print("Final Transition Matrix (small portion):")
-print(final_transition_matrix[:5, :5])  # Check a small portion of the final matrix
-
-# Compute the Steady-State Distribution
-n = final_transition_matrix.shape[0]
+# Now calculating steady state distribution using iterative method
+n = transition_matrix.shape[0]
 pi = np.ones(n) / n
-iteration = 0
 
-while True:
-    new_pi = np.dot(pi, final_transition_matrix)
-    if np.linalg.norm(new_pi - pi) < 1e-10:  # Check for convergence
+final_matrix = np.array(transition_matrix, dtype=float)
+
+MAX_ITERATIONS = 1_000_000
+TOLERANCE = 1e-12
+
+for _ in range(MAX_ITERATIONS):
+    new_pi = np.dot(pi, final_matrix)
+    if np.linalg.norm(new_pi - pi, ord=1) < TOLERANCE:
         break
     pi = new_pi
-    iteration += 1
-    if iteration % 10 == 0:
-        print(f"Iteration {iteration}: Top probabilities so far: {sorted(new_pi, reverse=True)[:5]}")
 
-board_probs = np.array([np.sum(pi[pos * 3:(pos + 1) * 3]) for pos in range(40)])
+board_probs = np.zeros(40)
 
-# Debug: Check board probabilities
-print("Board Probabilities:", board_probs[:10])  # Show top 10 for inspection
+# Sum the probabilities over the 3 states for each board position
+for pos in range(40):
+    board_probs[pos] = np.sum(pi[pos*3:(pos+1)*3])
 
-# Get the top 3 most visited squares
-top3 = np.sort(board_probs)[-3:][::-1]
-pos = [np.where(board_probs == i)[0][0] for i in top3]
+# Now finding the top 3 positions
+dup = board_probs.copy()
+dup.sort()
+top3 = dup[-3:][::-1]
+squares = []
 
-print("\nFinal Results:")
-print("Top three squares (in descending order):", pos)
-print("Probabilities:", top3)
-print("Total time (seconds):", t() - strt)
+for i in top3:
+    squares.append(np.where(board_probs == i)[0][0])
+
+ans = ''
+for i in squares:
+    ans += str(i)
+
+print(ans)
+end = t()
+print('------- %s seconds -------' % (end - strt))
